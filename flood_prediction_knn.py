@@ -388,7 +388,7 @@ def plot_results(data, cloud_pred_grid, flood_pred_grid,
              ha="center", color="#94a3b8", fontsize=9)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig("/home/claude/flood_prediction/hasil_prediksi_banjir.png",
+    plt.savefig("/Floodwatch_himawari8/hasil_prediksi_banjir.png",
                 dpi=150, bbox_inches="tight", facecolor="#0f172a")
     print("\n  ✓ Gambar disimpan: hasil_prediksi_banjir.png")
     plt.close()

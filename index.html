@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prediksi Banjir — Himawari-8 × KNN</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #060c1a;
+    --surface: #0d1b2e;
+    --surface2: #132038;
+    --border: #1e3a5f;
+    --accent: #0ea5e9;
+    --accent2: #06b6d4;
+    --safe: #22c55e;
+    --warn: #f59e0b;
+    --danger: #ef4444;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --mono: 'Space Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(14,165,233,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(14,165,233,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 20px; }
+
+  /* ── HEADER ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 0;
+    background: rgba(6,12,26,0.95);
+    backdrop-filter: blur(10px);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header-inner {
+    display: flex; align-items: center; justify-content: space-between;
+    max-width: 1280px; margin: 0 auto; padding: 0 20px;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .logo-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .logo-text { font-family: var(--mono); font-size: 13px; line-height: 1.3; }
+  .logo-text span { display: block; color: var(--accent); font-size: 10px; }
+  .badge {
+    font-family: var(--mono); font-size: 10px;
+    background: rgba(14,165,233,0.1); border: 1px solid var(--border);
+    color: var(--accent); padding: 4px 10px; border-radius: 4px;
+  }
+
+  /* ── HERO ── */
+  .hero {
+    padding: 48px 0 32px;
+    text-align: center;
+  }
+  .hero h1 {
+    font-family: var(--mono);
+    font-size: clamp(22px, 4vw, 36px);
+    font-weight: 700;
+    background: linear-gradient(135deg, #fff 30%, var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    line-height: 1.2; margin-bottom: 12px;
+  }
+  .hero p { color: var(--muted); font-size: 14px; max-width: 600px; margin: 0 auto; }
+
+  /* ── CONTROL PANEL ── */
+  .control-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 0 0 24px;
+  }
+  .controls-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    align-items: end;
+  }
+  .ctrl-group label {
+    display: block;
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--accent); margin-bottom: 8px;
+  }
+  .ctrl-group input[type=range] {
+    width: 100%; height: 4px;
+    -webkit-appearance: none; appearance: none;
+    background: var(--border); border-radius: 2px; outline: none;
+  }
+  .ctrl-group input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+  }
+  .ctrl-group .range-val {
+    font-family: var(--mono); font-size: 12px; color: var(--text);
+    text-align: right; margin-top: 4px;
+  }
+  select {
+    width: 100%;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); padding: 8px 12px; border-radius: 6px;
+    font-family: var(--sans); font-size: 13px; outline: none;
+    cursor: pointer;
+  }
+  .run-btn {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none; color: #000; font-family: var(--mono);
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    padding: 12px 24px; border-radius: 8px; cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    white-space: nowrap;
+  }
+  .run-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  .run-btn:active { transform: translateY(0); }
+  .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── MAIN GRID ── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-title {
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--accent);
+  }
+  .panel-body { padding: 18px; }
+
+  /* ── MAP CANVAS ── */
+  canvas {
+    width: 100%; border-radius: 6px;
+    image-rendering: pixelated;
+    display: block;
+  }
+  .map-legend {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    margin-top: 12px;
+  }
+  .legend-item {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--muted);
+  }
+  .legend-dot {
+    width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+  }
+
+  /* ── ACCURACY CHART ── */
+  .acc-chart {
+    display: flex; flex-direction: column; gap: 10px; padding: 4px 0;
+  }
+  .acc-row { display: flex; align-items: center; gap: 10px; }
+  .acc-label { font-family: var(--mono); font-size: 11px; color: var(--muted); width: 50px; }
+  .acc-bar-wrap { flex: 1; background: var(--surface2); border-radius: 3px; height: 20px; overflow: hidden; }
+  .acc-bar {
+    height: 100%; border-radius: 3px;
+    display: flex; align-items: center; padding: 0 8px;
+    font-family: var(--mono); font-size: 10px; font-weight: 700;
+    transition: width 0.8s cubic-bezier(.4,0,.2,1);
+    color: #000;
+  }
+  .acc-bar.rain { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+  .acc-bar.flood { background: linear-gradient(90deg, #ef4444, #f87171); }
+
+  /* ── STATS GRID ── */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+    text-align: center;
+  }
+  .stat-num {
+    font-family: var(--mono); font-size: 28px; font-weight: 700;
+    line-height: 1;
+  }
+  .stat-num.safe { color: var(--safe); }
+  .stat-num.warn { color: var(--warn); }
+  .stat-num.danger { color: var(--danger); }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .stat-sub { font-family: var(--mono); font-size: 9px; color: var(--border); margin-top: 4px; }
+
+  /* ── DETAIL PANEL ── */
+  .detail-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; margin-bottom: 24px;
+  }
+  .detail-title {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--accent); margin-bottom: 16px;
+  }
+  .detail-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;
+  }
+  .detail-item {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px;
+  }
+  .detail-item-label { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+  .detail-item-val { font-family: var(--mono); font-size: 15px; font-weight: 700; color: var(--text); }
+  .detail-item-sub { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+  /* ── LOG ── */
+  .log-box {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px;
+    font-family: var(--mono); font-size: 11px;
+    line-height: 1.8; max-height: 180px; overflow-y: auto;
+    color: var(--muted);
+  }
+  .log-box .ok { color: var(--safe); }
+  .log-box .info { color: var(--accent); }
+  .log-box .warn { color: var(--warn); }
+
+  /* ── ALERT ── */
+  .alert-box {
+    border-radius: 10px; padding: 14px 18px;
+    margin-bottom: 20px;
+    border: 1px solid; display: none;
+    font-size: 13px; font-weight: 500;
+  }
+  .alert-box.danger { background: rgba(239,68,68,0.08); border-color: var(--danger); color: #fca5a5; }
+  .alert-box.safe { background: rgba(34,197,94,0.08); border-color: var(--safe); color: #86efac; }
+
+  /* Loading */
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid rgba(0,0,0,0.3); border-top-color: #000;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+    vertical-align: middle; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Tooltip */
+  .tooltip {
+    position: fixed; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 12px; font-size: 11px;
+    pointer-events: none; z-index: 200; display: none;
+    font-family: var(--mono);
+  }
+
+  footer { text-align: center; padding: 24px 0; color: var(--muted); font-size: 11px; font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">🛰️</div>
+      <div class="logo-text">
+        FloodWatch KNN
+        <span>Himawari-8 Satellite · Jawa Barat</span>
+      </div>
+    </div>
+    <div class="badge">v1.0 · SIMULASI</div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="hero">
+    <h1>PREDIKSI BANJIR<br>DARI DATA SATELIT HIMAWARI-8</h1>
+    <p>Menggunakan metode K-Nearest Neighbor (KNN) untuk memprediksi curah hujan
+    dari suhu awan (Cloud Top Temperature) dan menentukan level risiko banjir.</p>
+  </div>
+
+  <!-- Controls -->
+  <div class="control-panel">
+    <div class="controls-grid">
+      <div class="ctrl-group">
+        <label>Nilai K (Tetangga Terdekat)</label>
+        <input type="range" id="kVal" min="1" max="15" value="5" step="2"
+               oninput="document.getElementById('kDisplay').textContent='K = '+this.value">
+        <div class="range-val" id="kDisplay">K = 5</div>
+      </div>
+      <div class="ctrl-group">
+        <label>Threshold Banjir (mm/jam)</label>
+        <input type="range" id="floodThreshold" min="5" max="40" value="20" step="5"
+               oninput="document.getElementById('thDisplay').textContent=this.value+' mm/jam'">
+        <div class="range-val" id="thDisplay">20 mm/jam</div>
+      </div>
+      <div class="ctrl-group">
+        <label>Ukuran Training Set</label>
+        <select id="trainSize">
+          <option value="0.5">50% Training (90 data)</option>
+          <option value="0.67" selected>67% Training (120 data)</option>
+          <option value="0.8">80% Training (144 data)</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <label>Mode Peta</label>
+        <select id="mapMode">
+          <option value="flood">Risiko Banjir</option>
+          <option value="cloud">Kelas Awan</option>
+          <option value="ctt">Suhu Awan (CTT)</option>
+          <option value="precip">Curah Hujan</option>
+        </select>
+      </div>
+      <div class="ctrl-group" style="display:flex;align-items:flex-end">
+        <button class="run-btn" id="runBtn" onclick="runPrediction()">
+          ▶ JALANKAN PREDIKSI
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alert -->
+  <div class="alert-box danger" id="alertDanger">
+    ⚠️ <strong>PERINGATAN BANJIR:</strong> Terdeteksi area dengan risiko banjir tinggi (&gt;20 mm/jam).
+    Segera pantau daerah: <span id="alertArea"></span>
+  </div>
+  <div class="alert-box safe" id="alertSafe">
+    ✓ Kondisi cuaca relatif aman di seluruh area pengamatan.
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-num safe" id="statSafe">—</div>
+      <div class="stat-label">AREA AMAN</div>
+      <div class="stat-sub">&lt; 10 mm/jam</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num warn" id="statWarn">—</div>
+      <div class="stat-label">AREA WASPADA</div>
+      <div class="stat-sub">10–20 mm/jam</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num danger" id="statDanger">—</div>
+      <div class="stat-label">BAHAYA BANJIR</div>
+      <div class="stat-sub">&gt; 20 mm/jam</div>
+    </div>
+  </div>
+
+  <!-- Main Grid -->
+  <div class="main-grid">
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title" id="mapTitle">Peta Risiko Banjir</span>
+        <span style="font-size:10px;color:var(--muted)">Jawa Barat, Indonesia</span>
+      </div>
+      <div class="panel-body">
+        <canvas id="mapCanvas" width="400" height="320"></canvas>
+        <div class="map-legend" id="mapLegend"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Akurasi KNN — Berbagai Nilai K</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px">
+          <span style="display:inline-block;width:10px;height:10px;background:#3b82f6;border-radius:2px;margin-right:5px;vertical-align:middle"></span>Prediksi Hujan &nbsp;
+          <span style="display:inline-block;width:10px;height:10px;background:#ef4444;border-radius:2px;margin-right:5px;vertical-align:middle"></span>Prediksi Banjir
+        </div>
+        <div class="acc-chart" id="accChart"></div>
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="font-family:var(--mono);font-size:10px;color:var(--accent);margin-bottom:10px;text-transform:uppercase;letter-spacing:1px">Euclidean Distance (KNN)</div>
+          <canvas id="distCanvas" width="400" height="100"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Info -->
+  <div class="detail-panel">
+    <div class="detail-title">📊 Detail Hasil Prediksi</div>
+    <div class="detail-grid">
+      <div class="detail-item">
+        <div class="detail-item-label">Akurasi Terbaik — Prediksi Hujan</div>
+        <div class="detail-item-val" id="detAcc1">—</div>
+        <div class="detail-item-sub" id="detK1">menunggu prediksi...</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-item-label">Akurasi Terbaik — Prediksi Banjir</div>
+        <div class="detail-item-val" id="detAcc2">—</div>
+        <div class="detail-item-sub" id="detK2">menunggu prediksi...</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-item-label">Total Data Training</div>
+        <div class="detail-item-val" id="detTrain">—</div>
+        <div class="detail-item-sub">dari 180 sampel</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-item-label">Range Suhu Awan (CTT)</div>
+        <div class="detail-item-val">187 – 300 K</div>
+        <div class="detail-item-sub">Kelvin (Himawari-8 AHI)</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-item-label">Metrik Jarak</div>
+        <div class="detail-item-val">Euclidean</div>
+        <div class="detail-item-sub">Dxy = √Σ(xi - yi)²</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-item-label">Resolusi Grid</div>
+        <div class="detail-item-val">50 × 50</div>
+        <div class="detail-item-sub">≈ 2500 titik prediksi</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="panel" style="margin-bottom:24px">
+    <div class="panel-header">
+      <span class="panel-title">System Log</span>
+    </div>
+    <div class="panel-body">
+      <div class="log-box" id="logBox">
+        <span class="info">[SISTEM]</span> FloodWatch KNN siap. Atur parameter dan klik JALANKAN PREDIKSI.<br>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<footer>
+  Prediksi Banjir dari Satelit Himawari-8 · K-Nearest Neighbor · Universitas Telkom × BRIN · 2024
+</footer>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// KNN SIMULATION ENGINE (JavaScript port of Python script)
+// ─────────────────────────────────────────────────────────────
+
+const GRID = 50;
+const LAT_MIN = -8, LAT_MAX = -5;
+const LON_MIN = 105, LON_MAX = 109;
+
+// Seeded RNG
+function seededRng(seed) {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+function randn(rng) {
+  let u = 0, v = 0;
+  while (!u) u = rng();
+  while (!v) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+// ── Generate simulation data ──
+function generateData(seed = 42) {
+  const rng = seededRng(seed);
+  const ctt = new Float32Array(GRID * GRID);
+  const precip = new Float32Array(GRID * GRID);
+  const cloudClass = new Uint8Array(GRID * GRID);
+  const floodRisk = new Uint8Array(GRID * GRID);
+
+  // Base CTT
+  for (let i = 0; i < GRID * GRID; i++) {
+    ctt[i] = 260 + 20 * randn(rng);
+  }
+
+  // Convective cells (cold = thick cloud)
+  const nCold = 5;
+  for (let c = 0; c < nCold; c++) {
+    const cx = Math.floor(rng() * (GRID - 10)) + 5;
+    const cy = Math.floor(rng() * (GRID - 10)) + 5;
+    const r = Math.floor(rng() * 4) + 4;
+    for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
+      const dist = Math.sqrt((i - cx) ** 2 + (j - cy) ** 2);
+      if (dist < r) ctt[i * GRID + j] -= 40 * (1 - dist / r);
+    }
+  }
+
+  // Clear cells (warm = no rain)
+  const nWarm = 3;
+  for (let c = 0; c < nWarm; c++) {
+    const cx = Math.floor(rng() * (GRID - 10)) + 5;
+    const cy = Math.floor(rng() * (GRID - 10)) + 5;
+    const r = Math.floor(rng() * 5) + 5;
+    for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
+      const dist = Math.sqrt((i - cx) ** 2 + (j - cy) ** 2);
+      if (dist < r) ctt[i * GRID + j] += 30 * (1 - dist / r);
+    }
+  }
+
+  // Clip CTT
+  for (let i = 0; i < ctt.length; i++) {
+    ctt[i] = Math.max(180, Math.min(300, ctt[i]));
+  }
+
+  // Labels
+  for (let i = 0; i < ctt.length; i++) {
+    if (ctt[i] >= 270) cloudClass[i] = 0; // Tidak Hujan
+    else if (ctt[i] >= 230) cloudClass[i] = 1; // Mendung
+    else cloudClass[i] = 2; // Hujan
+
+    if (cloudClass[i] === 2) precip[i] = 15 + rng() * 30;
+    else if (cloudClass[i] === 1) precip[i] = 2 + rng() * 13;
+    else precip[i] = rng() * 3;
+
+    if (precip[i] >= 20) floodRisk[i] = 2;
+    else if (precip[i] >= 10) floodRisk[i] = 1;
+    else floodRisk[i] = 0;
+  }
+
+  return { ctt, precip, cloudClass, floodRisk };
+}
+
+// ── Standardize ──
+function standardize(arr) {
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const std = Math.sqrt(arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length) || 1;
+  return { scaled: arr.map(v => (v - mean) / std), mean, std };
+}
+
+function scaleWith(arr, mean, std) {
+  return arr.map(v => (v - mean) / std);
+}
+
+// ── KNN predict single ──
+function knnPredict(trainX, trainY, testX, k) {
+  const dists = trainX.map((x, i) => ({
+    d: Math.sqrt(x.reduce((s, v, j) => s + (v - testX[j]) ** 2, 0)),
+    label: trainY[i]
+  }));
+  dists.sort((a, b) => a.d - b.d);
+  const neighbors = dists.slice(0, k);
+  const votes = {};
+  neighbors.forEach(n => { votes[n.label] = (votes[n.label] || 0) + 1; });
+  return +Object.entries(votes).sort((a, b) => b[1] - a[1])[0][0];
+}
+
+// ── KNN batch ──
+function knnBatch(trainX, trainY, testX, k) {
+  return testX.map(x => knnPredict(trainX, trainY, x, k));
+}
+
+// ── Accuracy ──
+function accuracy(yTrue, yPred) {
+  let correct = 0;
+  for (let i = 0; i < yTrue.length; i++) if (yTrue[i] === yPred[i]) correct++;
+  return correct / yTrue.length * 100;
+}
+
+// ── Train/test split ──
+function splitData(X, y, trainFrac, seed = 7) {
+  const n = X.length;
+  const rng = seededRng(seed);
+  const idx = [...Array(n).keys()].sort(() => rng() - 0.5);
+  const nTrain = Math.floor(n * trainFrac);
+  const trainIdx = idx.slice(0, nTrain);
+  const testIdx = idx.slice(nTrain);
+  return {
+    Xtrain: trainIdx.map(i => X[i]), ytrain: trainIdx.map(i => y[i]),
+    Xtest: testIdx.map(i => X[i]), ytest: testIdx.map(i => y[i])
+  };
+}
+
+// ── Sample ──
+function sampleData(ctt, labels1, labels2, n = 180, seed = 99) {
+  const rng = seededRng(seed);
+  const total = ctt.length;
+  const idx = [];
+  while (idx.length < n) {
+    const i = Math.floor(rng() * total);
+    if (!idx.includes(i)) idx.push(i);
+  }
+  return {
+    X1: idx.map(i => [ctt[i]]),
+    X2: idx.map(i => [ctt[i]]),
+    y1: idx.map(i => labels1[i]),
+    y2: idx.map(i => labels2[i]),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// RENDERING
+// ─────────────────────────────────────────────────────────────
+
+const CTT_COLORMAP = (t) => {
+  // t: 0–1 (180K–300K), cold=blue, warm=yellow/red
+  const stops = [
+    [0, [18, 32, 120]], [0.2, [30, 100, 180]], [0.4, [90, 180, 220]],
+    [0.6, [200, 210, 100]], [0.8, [240, 180, 60]], [1, [255, 215, 0]]
+  ];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (t >= stops[i][0] && t <= stops[i + 1][0]) {
+      const f = (t - stops[i][0]) / (stops[i + 1][0] - stops[i][0]);
+      return stops[i][1].map((v, j) => Math.round(v + f * (stops[i + 1][1][j] - v)));
+    }
+  }
+  return [255, 215, 0];
+};
+
+const PRECIP_COLORMAP = (t) => {
+  const stops = [
+    [0, [240, 248, 255]], [0.3, [135, 206, 235]],
+    [0.6, [30, 100, 200]], [1, [0, 0, 100]]
+  ];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (t >= stops[i][0] && t <= stops[i + 1][0]) {
+      const f = (t - stops[i][0]) / (stops[i + 1][0] - stops[i][0]);
+      return stops[i][1].map((v, j) => Math.round(v + f * (stops[i + 1][1][j] - v)));
+    }
+  }
+  return [0, 0, 100];
+};
+
+const FLOOD_COLORS_RGB = [
+  [34, 197, 94], [245, 158, 11], [239, 68, 68]
+];
+const CLOUD_COLORS_RGB = [
+  [255, 215, 0], [135, 206, 235], [30, 58, 138]
+];
+
+function drawMap(canvas, data, mode, predictedGrid) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const imgData = ctx.createImageData(w, h);
+  const px = imgData.data;
+
+  for (let i = 0; i < GRID; i++) for (let j = 0; j < GRID; j++) {
+    const idx = i * GRID + j;
+    const px_i = Math.floor(i * h / GRID);
+    const px_j = Math.floor(j * w / GRID);
+    const px_h = Math.floor((i + 1) * h / GRID) - px_i;
+    const px_w = Math.floor((j + 1) * w / GRID) - px_j;
+
+    let rgb;
+    if (mode === 'ctt') {
+      const t = (data.ctt[idx] - 180) / 120;
+      rgb = CTT_COLORMAP(Math.max(0, Math.min(1, t)));
+    } else if (mode === 'precip') {
+      const t = Math.min(data.precip[idx] / 45, 1);
+      rgb = PRECIP_COLORMAP(t);
+    } else if (mode === 'cloud') {
+      rgb = CLOUD_COLORS_RGB[predictedGrid ? predictedGrid[idx] : data.cloudClass[idx]];
+    } else {
+      rgb = FLOOD_COLORS_RGB[predictedGrid ? predictedGrid[idx] : data.floodRisk[idx]];
+    }
+
+    for (let pi = 0; pi < px_h; pi++) for (let pj = 0; pj < px_w; pj++) {
+      const base = ((px_i + pi) * w + (px_j + pj)) * 4;
+      px[base] = rgb[0]; px[base + 1] = rgb[1]; px[base + 2] = rgb[2]; px[base + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  // City markers
+  const cities = [
+    { name: 'Bandung', lat: -6.91, lon: 107.61 },
+    { name: 'Bogor', lat: -6.60, lon: 106.80 },
+    { name: 'Cirebon', lat: -6.73, lon: 108.55 },
+  ];
+  ctx.font = 'bold 9px monospace';
+  cities.forEach(city => {
+    const x = ((city.lon - LON_MIN) / (LON_MAX - LON_MIN)) * w;
+    const y = ((city.lat - LAT_MAX) / (LAT_MIN - LAT_MAX)) * h;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'white';
+    ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'white';
+    ctx.fillText(city.name, x + 6, y + 3);
+  });
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 0.5;
+  for (let i = 1; i < 4; i++) {
+    ctx.beginPath(); ctx.moveTo(0, i * h / 4); ctx.lineTo(w, i * h / 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(i * w / 4, 0); ctx.lineTo(i * w / 4, h); ctx.stroke();
+  }
+}
+
+function drawDistChart(canvas, trainX, trainY, k) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const w = canvas.width, h = canvas.height;
+  ctx.fillStyle = '#132038';
+  ctx.fillRect(0, 0, w, h);
+
+  // Pick a test point and show distances to training points
+  const testPoint = 250; // sample CTT in K
+  const dists = trainX.map((x, i) => ({
+    d: Math.abs(x[0] - testPoint),
+    label: trainY[i]
+  })).sort((a, b) => a.d - b.d).slice(0, 20);
+
+  const maxD = Math.max(...dists.map(d => d.d)) || 1;
+  const colors = ['#FFD700', '#87CEEB', '#1E3A8A'];
+
+  dists.forEach((item, i) => {
+    const x = (i / dists.length) * w;
+    const barH = (item.d / maxD) * (h - 20);
+    ctx.fillStyle = colors[item.label] + 'cc';
+    ctx.fillRect(x, h - barH - 10, w / dists.length - 1, barH);
+  });
+
+  ctx.fillStyle = '#ef4444';
+  ctx.fillRect(0, h - 14, (k / 20) * w, 2);
+
+  ctx.fillStyle = '#64748b';
+  ctx.font = '9px monospace';
+  ctx.fillText(`Jarak Euclidean (20 tetangga terdekat) | Garis merah = K=${k}`, 4, h - 2);
+}
+
+// ─────────────────────────────────────────────────────────────
+// MAIN RUN
+// ─────────────────────────────────────────────────────────────
+
+let lastData = null;
+let lastResults = null;
+
+function log(msg, type = 'info') {
+  const box = document.getElementById('logBox');
+  const cls = type === 'ok' ? 'ok' : type === 'warn' ? 'warn' : 'info';
+  box.innerHTML += `<span class="${cls}">[${new Date().toLocaleTimeString()}]</span> ${msg}<br>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+async function runPrediction() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>MEMPROSES...';
+
+  await new Promise(r => setTimeout(r, 50));
+
+  const k = parseInt(document.getElementById('kVal').value);
+  const trainFrac = parseFloat(document.getElementById('trainSize').value);
+  const floodThresh = parseInt(document.getElementById('floodThreshold').value);
+  const mapMode = document.getElementById('mapMode').value;
+
+  log(`Memulai prediksi | K=${k} | Train=${Math.round(trainFrac*100)}% | Threshold=${floodThresh}mm/jam`);
+
+  // 1. Generate data
+  const data = generateData(42);
+
+  // Override flood risk with custom threshold
+  const customFlood = new Uint8Array(data.floodRisk.length);
+  for (let i = 0; i < data.precip.length; i++) {
+    if (data.precip[i] >= floodThresh) customFlood[i] = 2;
+    else if (data.precip[i] >= floodThresh * 0.5) customFlood[i] = 1;
+    else customFlood[i] = 0;
+  }
+
+  log('Data simulasi Himawari-8 berhasil di-generate (50×50 grid, 2500 titik)');
+
+  // 2. Sample
+  const nSamples = 180;
+  const { X1, X2, y1, y2 } = sampleData(data.ctt, data.cloudClass, customFlood, nSamples);
+
+  // 3. Standardize
+  const allX1 = X1.map(x => x[0]);
+  const { scaled: scaled1, mean: m1, std: s1 } = standardize(allX1);
+  const X1sc = scaled1.map(v => [v]);
+
+  const allX2 = X2.map(x => x[0]);
+  const { scaled: scaled2, mean: m2, std: s2 } = standardize(allX2);
+  const X2sc = scaled2.map(v => [v]);
+
+  // 4. Train/test split
+  const split1 = splitData(X1sc, y1, trainFrac);
+  const split2 = splitData(X2sc, y2, trainFrac);
+
+  const nTrain = split1.Xtrain.length;
+  document.getElementById('detTrain').textContent = nTrain + ' data';
+  log(`Split: ${nTrain} training / ${nSamples - nTrain} testing`);
+
+  // 5. Evaluate multiple K values
+  await new Promise(r => setTimeout(r, 20));
+  const kVals = [5, 7, 9, 11];
+  const cloudAccs = {}, floodAccs = {};
+
+  for (const kv of kVals) {
+    const pred1 = knnBatch(split1.Xtrain, split1.ytrain, split1.Xtest, kv);
+    cloudAccs[kv] = accuracy(split1.ytest, pred1);
+    const pred2 = knnBatch(split2.Xtrain, split2.ytrain, split2.Xtest, kv);
+    floodAccs[kv] = accuracy(split2.ytest, pred2);
+    log(`K=${kv} → Hujan: ${cloudAccs[kv].toFixed(2)}% | Banjir: ${floodAccs[kv].toFixed(2)}%`);
+  }
+
+  // 6. Predict full grid
+  const gridX1sc = Array.from(data.ctt).map(v => [(v - m1) / s1]);
+  const gridX2sc = Array.from(data.ctt).map(v => [(v - m2) / s2]);
+
+  const cloudPred = knnBatch(split1.Xtrain, split1.ytrain, gridX1sc, k);
+  const floodPred = knnBatch(split2.Xtrain, split2.ytrain, gridX2sc, k);
+
+  // 7. Stats
+  const safe = floodPred.filter(v => v === 0).length;
+  const warn = floodPred.filter(v => v === 1).length;
+  const danger = floodPred.filter(v => v === 2).length;
+  const total = floodPred.length;
+
+  document.getElementById('statSafe').textContent = (safe/total*100).toFixed(1) + '%';
+  document.getElementById('statWarn').textContent = (warn/total*100).toFixed(1) + '%';
+  document.getElementById('statDanger').textContent = (danger/total*100).toFixed(1) + '%';
+
+  // 8. Best K
+  const bestKCloud = kVals.reduce((a, b) => cloudAccs[a] >= cloudAccs[b] ? a : b);
+  const bestKFlood = kVals.reduce((a, b) => floodAccs[a] >= floodAccs[b] ? a : b);
+
+  document.getElementById('detAcc1').textContent = cloudAccs[bestKCloud].toFixed(2) + '%';
+  document.getElementById('detK1').textContent = `K = ${bestKCloud} (terbaik)`;
+  document.getElementById('detAcc2').textContent = floodAccs[bestKFlood].toFixed(2) + '%';
+  document.getElementById('detK2').textContent = `K = ${bestKFlood} (terbaik)`;
+
+  // 9. Draw accuracy chart
+  const chart = document.getElementById('accChart');
+  chart.innerHTML = kVals.map(kv => `
+    <div class="acc-row">
+      <div class="acc-label">K = ${kv}</div>
+      <div class="acc-bar-wrap">
+        <div class="acc-bar rain" style="width:${cloudAccs[kv]}%">
+          ${cloudAccs[kv].toFixed(1)}%
+        </div>
+      </div>
+    </div>
+    <div class="acc-row">
+      <div class="acc-label"></div>
+      <div class="acc-bar-wrap">
+        <div class="acc-bar flood" style="width:${floodAccs[kv]}%">
+          ${floodAccs[kv].toFixed(1)}%
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  // 10. Draw map
+  const canvas = document.getElementById('mapCanvas');
+  const predGrid = mapMode === 'flood' ? floodPred :
+                   mapMode === 'cloud' ? cloudPred : null;
+  drawMap(canvas, data, mapMode, predGrid);
+
+  // Legend
+  const legends = {
+    flood: [
+      { color: '#22c55e', label: 'Aman (< '+floodThresh*0.5+' mm/jam)' },
+      { color: '#f59e0b', label: 'Waspada ('+floodThresh*0.5+'–'+floodThresh+' mm/jam)' },
+      { color: '#ef4444', label: 'Bahaya Banjir (> '+floodThresh+' mm/jam)' },
+    ],
+    cloud: [
+      { color: '#FFD700', label: 'Tidak Hujan (270–300 K)' },
+      { color: '#87CEEB', label: 'Mendung (230–270 K)' },
+      { color: '#1E3A8A', label: 'Hujan (< 230 K)' },
+    ],
+    ctt: [{ color: '#1220' + '78', label: 'Dingin (180K) → Panas (300K)' }],
+    precip: [{ color: '#87CEEB', label: 'Rendah → Tinggi (mm/jam)' }],
+  };
+  document.getElementById('mapLegend').innerHTML =
+    (legends[mapMode] || legends.flood).map(l =>
+      `<div class="legend-item"><div class="legend-dot" style="background:${l.color}"></div>${l.label}</div>`
+    ).join('');
+
+  const titles = { flood: 'Peta Risiko Banjir', cloud: 'Prediksi Kelas Awan', ctt: 'Suhu Awan (CTT)', precip: 'Curah Hujan' };
+  document.getElementById('mapTitle').textContent = titles[mapMode];
+
+  // 11. Distance chart
+  drawDistChart(document.getElementById('distCanvas'), split1.Xtrain, split1.ytrain, k);
+
+  // 12. Alert
+  const dangerPct = danger / total * 100;
+  document.getElementById('alertDanger').style.display = dangerPct > 5 ? 'block' : 'none';
+  document.getElementById('alertSafe').style.display = dangerPct <= 5 ? 'block' : 'none';
+  document.getElementById('alertArea').textContent = dangerPct > 5 ?
+    `~${danger} titik grid (${dangerPct.toFixed(1)}% area)` : '';
+
+  log(`Prediksi selesai! Area bahaya: ${dangerPct.toFixed(1)}% | Best K (hujan): ${bestKCloud} | Best K (banjir): ${bestKFlood}`, 'ok');
+
+  lastData = data;
+  lastResults = { cloudAccs, floodAccs, cloudPred, floodPred };
+
+  btn.disabled = false;
+  btn.innerHTML = '▶ JALANKAN PREDIKSI';
+}
+
+// Canvas hover tooltip
+document.getElementById('mapCanvas').addEventListener('mousemove', function(e) {
+  const rect = this.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const j = Math.floor(x / rect.width * GRID);
+  const i = Math.floor(y / rect.height * GRID);
+  const idx = i * GRID + j;
+
+  const lat = (LAT_MAX + (i / GRID) * (LAT_MIN - LAT_MAX)).toFixed(2);
+  const lon = (LON_MIN + (j / GRID) * (LON_MAX - LON_MIN)).toFixed(2);
+
+  const tt = document.getElementById('tooltip');
+  if (lastData && idx < lastData.ctt.length) {
+    const riskLabels = ['Aman', 'Waspada', 'Bahaya Banjir'];
+    const risk = lastResults ? riskLabels[lastResults.floodPred[idx]] : '-';
+    tt.innerHTML = `Lat: ${lat}° | Lon: ${lon}°<br>` +
+      `CTT: ${lastData.ctt[idx].toFixed(1)} K<br>` +
+      `Curah Hujan: ${lastData.precip[idx].toFixed(1)} mm/jam<br>` +
+      `<b style="color:${risk==='Aman'?'#22c55e':risk==='Waspada'?'#f59e0b':'#ef4444'}">Risiko: ${risk}</b>`;
+    tt.style.display = 'block';
+    tt.style.left = (e.clientX + 14) + 'px';
+    tt.style.top = (e.clientY + 14) + 'px';
+  }
+});
+
+document.getElementById('mapCanvas').addEventListener('mouseleave', () => {
+  document.getElementById('tooltip').style.display = 'none';
+});
+
+// Auto-run on load
+window.addEventListener('load', runPrediction);
+</script>
+</body>
+</html>

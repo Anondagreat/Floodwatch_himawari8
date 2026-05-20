@@ -1,6 +1,6 @@
 # 🛰️ Prediksi Banjir dari Satelit Himawari-8 — KNN
 
-**Universitas Telkom | Bandung, 2026**
+**Universitas Telkom × BRIN | Bandung, 2024**
 
 ---
 

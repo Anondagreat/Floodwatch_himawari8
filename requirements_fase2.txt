@@ -1,0 +1,14 @@
+# ─── FASE 1 (sudah ada) ───────────────────────────────────────
+numpy>=1.24
+scikit-learn>=1.3
+matplotlib>=3.7
+scipy>=1.11
+
+# ─── FASE 2 (baru) ───────────────────────────────────────────
+netCDF4>=1.6.4          # Baca file .nc dari Himawari-8
+# Alternatif jika netCDF4 susah install di Windows:
+# h5py>=3.9             # Bisa baca format HDF5 (subset dari NetCDF4)
+# xarray>=2023.0        # High-level wrapper untuk NetCDF, lebih mudah dipakai
+
+# ─── Opsional tapi direkomendasikan ──────────────────────────
+schedule>=1.2           # Alternatif untuk scheduler (lebih clean dari time.sleep)

@@ -298,7 +298,14 @@ def save_result_plot(result: dict, out_path: Path) -> None:
     ax4.pcolormesh(lons, lats, result["flood_pred"], cmap=f_cmap, norm=f_norm, shading="auto")
     
     # Marker kota
-    for city, (la, lo) in [("Bandung",(-6.91,107.61)),("Bogor",(-6.60,106.80)),("Cirebon",(-6.73,108.55))]:
+    for city, (la, lo) in [
+    ("Bandung",    (-6.91, 107.61)),
+    ("Cimahi",     (-6.88, 107.54)),
+    ("Soreang",    (-7.03, 107.52)),
+    ("Lembang",    (-6.81, 107.62)),
+    ("Majalaya",   (-7.04, 107.78)),
+    ("Padalarang", (-6.84, 107.47)),
+]:
         ax4.plot(lo, la, "w^", ms=6, zorder=5)
         ax4.text(lo+0.05, la+0.05, city, fontsize=7, color="white", fontweight="bold")
     
@@ -336,42 +343,33 @@ def save_log_entry(result: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def run_once(nc_paths: list[Path], knn, scaler) -> list[dict]:
-    """
-    Jalankan pipeline sekali untuk list file .nc yang diberikan.
-    Download sudah selesai di luar fungsi ini.
-    """
+def run_once(nc_paths: list, knn, scaler) -> list[dict]:
+    """Jalankan pipeline untuk list file .nc."""
+    from himawari_parser import parse_nc_file
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"\n  Memproses {len(nc_paths)} file ...")
     all_results = []
-    
+
     for nc_path in nc_paths:
-        # 1. Parse
-        parsed = parse_nc_file(nc_path)
+        from pathlib import Path
+        parsed = parse_nc_file(Path(nc_path) if not hasattr(nc_path, 'stat') else nc_path)
         if parsed is None:
             continue
-        
-        # 2. Prediksi
-        result = predict_from_parsed(parsed, knn, scaler)
-        
-        # 3. Simpan plot
-        ts_str = result["timestamp"].strftime("%Y%m%d_%H%M")
+
+        result    = predict_from_parsed(parsed, knn, scaler)
+        ts_str    = result["timestamp"].strftime("%Y%m%d_%H%M")
         plot_path = OUTPUT_DIR / f"prediksi_{ts_str}.png"
         save_result_plot(result, plot_path)
-        
-        # 4. Log
         save_log_entry(result)
-        
-        # 5. Print status
+
         print(f"  {result['timestamp_wib'].strftime('%d/%m %H:%M WIB')} | "
               f"{result['alert_level']:8s} | "
               f"Bahaya={result['stats']['bahaya_pct']:.1f}% | "
-              f"CTT_min={result['stats']['ctt_min']:.1f}K | "
-              f"Plot → {plot_path.name}")
-        
+              f"CTT_min={result['stats']['ctt_min']:.1f}K")
+
         all_results.append(result)
-    
+
     return all_results
 
 
@@ -438,33 +436,67 @@ def main():
     knn, scaler, meta = build_or_load_knn_model(force_retrain=args.retrain)
     
     if args.mode == "local":
-        # Proses semua file .nc yang ada di folder lokal
-        print("\n[2] Mode LOCAL — Memproses file yang sudah ada ...")
-        nc_files = sorted(LOCAL_DATA_DIR.glob("H08_*.nc"))
-        if not nc_files:
-            print(f"  Tidak ada file .nc di {LOCAL_DATA_DIR}")
-            print("  Menjalankan simulasi fallback (netCDF4 parser mode) ...")
-            # Buat path dummy agar _simulate_parse dipanggil
-            from himawari_parser import _simulate_parse
-            dummy_paths = [
-                LOCAL_DATA_DIR / f"H08_20240415_{h:02d}00_R10_FLDK.02401_02401.nc"
-                for h in range(7, 14)   # 07:00–13:00 UTC (14:00–20:00 WIB)
-            ]
-            LOCAL_DATA_DIR.mkdir(exist_ok=True)
-            # Buat file dummy kosong agar path exist check lewat
-            for p in dummy_paths:
-                p.touch()
-            nc_files = dummy_paths
-        results = run_once(nc_files, knn, scaler)
+        print("\n[2] Mode LOCAL — Memproses file .nc yang sudah ada ...")
+    from himawari_downloader import LOCAL_DATA_DIR
+    nc_files = sorted(LOCAL_DATA_DIR.glob("NC_H09_*.nc"))
+    nc_files = [f for f in nc_files if f.stat().st_size > 10_000]
+    
+    if not nc_files:
+        print(f"  Tidak ada file .nc di {LOCAL_DATA_DIR}")
+        print("  Gunakan --mode live untuk download data dulu.")
+        print("  Atau jalankan simulasi manual:")
+        print("    python flood_prediction_knn.py")
+        return
+    
+    results = run_once(nc_files, knn, scaler)
+    print_summary(results)
+    
+    if not nc_files:
+        print(f"  Tidak ada file .nc valid di {LOCAL_DATA_DIR}")
+        print("  Menjalankan mode simulasi penuh (tanpa file .nc) ...")
+        
+        # Langsung generate hasil simulasi tanpa buat file dummy
+        from himawari_parser import _simulate_parse, OUTPUT_GRID_SIZE
+        from pathlib import Path
+        
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        results = []
+        
+        # Simulasi 7 frame: 07:00–13:00 UTC (14:00–20:00 WIB)
+        for hour in range(7, 14):
+            fake_path = Path(
+                f"H08_20240415_{hour:02d}00_R10_FLDK.02401_02401.nc"
+            )
+            print(f"  [SIM] Frame {hour:02d}:00 UTC ({hour+7:02d}:00 WIB) ...", end=" ")
+            parsed = _simulate_parse(fake_path)
+            result = predict_from_parsed(parsed, knn, scaler)
+            
+            ts_str   = result["timestamp"].strftime("%Y%m%d_%H%M")
+            plot_path = OUTPUT_DIR / f"prediksi_{ts_str}.png"
+            save_result_plot(result, plot_path)
+            save_log_entry(result)
+            
+            print(
+                f"{result['alert_level']:8s} | "
+                f"Bahaya={result['stats']['bahaya_pct']:.1f}% | "
+                f"CTT_min={result['stats']['ctt_min']:.1f}K"
+            )
+            results.append(result)
+        
+        print_summary(results)
+        return   # keluar dari main() setelah selesai
     
     elif args.mode == "live":
-        print("\n[2] Mode LIVE — Download data terbaru ...")
-        nc_files = download_latest(n_files=6)
+        print("\n[2] Mode LIVE — Download data terbaru dari JAXA ...")
+        from himawari_downloader import download_latest
+        nc_files = download_latest(n_files=3)
+        
         if not nc_files:
-            print("  Download gagal. Pastikan akun JAXA sudah dikonfigurasi.")
-            print("  Jalankan dengan --mode local untuk menggunakan simulasi.")
+            print("  Download gagal. Cek koneksi atau kredensial JAXA.")
             return
+        
         results = run_once(nc_files, knn, scaler)
+        print_summary(results)
     
     elif args.mode == "range":
         if not args.start or not args.end:

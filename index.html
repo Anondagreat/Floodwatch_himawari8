@@ -474,8 +474,8 @@
 // ─────────────────────────────────────────────────────────────
 
 const GRID = 50;
-const LAT_MIN = -8, LAT_MAX = -5;
-const LON_MIN = 105, LON_MAX = 109;
+const LAT_MIN = -7.4, LAT_MAX = -6.4;
+const LON_MIN = 107, LON_MAX = 108.3;
 
 // Seeded RNG
 function seededRng(seed) {
@@ -696,10 +696,13 @@ function drawMap(canvas, data, mode, predictedGrid) {
 
   // City markers
   const cities = [
-    { name: 'Bandung', lat: -6.91, lon: 107.61 },
-    { name: 'Bogor', lat: -6.60, lon: 106.80 },
-    { name: 'Cirebon', lat: -6.73, lon: 108.55 },
-  ];
+    { name: 'Bandung',    lat: -6.91, lon: 107.61 },
+    { name: 'Cimahi',     lat: -6.88, lon: 107.54 },
+    { name: 'Lembang',    lat: -6.81, lon: 107.62 },
+    { name: 'Soreang',    lat: -7.03, lon: 107.52 },
+    { name: 'Majalaya',   lat: -7.04, lon: 107.78 },
+    { name: 'Padalarang', lat: -6.84, lon: 107.47 },
+];
   ctx.font = 'bold 9px monospace';
   cities.forEach(city => {
     const x = ((city.lon - LON_MIN) / (LON_MAX - LON_MIN)) * w;

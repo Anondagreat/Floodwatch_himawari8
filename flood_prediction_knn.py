@@ -34,8 +34,8 @@ warnings.filterwarnings('ignore')
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Area studi: Jawa Barat (Bandung dan sekitarnya)
-LAT_MIN, LAT_MAX = -8.0, -5.0   # derajat selatan
-LON_MIN, LON_MAX = 105.0, 109.0  # derajat timur
+LAT_MIN, LAT_MAX = -7.4, -6.4   # derajat selatan
+LON_MIN, LON_MAX = 107.0, 108.3  # derajat timur
 GRID_SIZE = 50  # resolusi grid (50x50 titik)
 
 # Threshold suhu awan (Kelvin) — sesuai paper
@@ -343,11 +343,15 @@ def plot_results(data, cloud_pred_grid, flood_pred_grid,
     
     # Tambah marker kota-kota penting di Jawa Barat
     cities = {
-        "Bandung": (-6.91, 107.61),
-        "Bogor": (-6.60, 106.80),
-        "Cirebon": (-6.73, 108.55),
-        "Sukabumi": (-6.92, 106.93),
-    }
+    "Bandung":       (-6.91, 107.61),
+    "Cimahi":        (-6.88, 107.54),
+    "Soreang":       (-7.03, 107.52),
+    "Majalaya":      (-7.04, 107.78),
+    "Lembang":       (-6.81, 107.62),
+    "Banjaran":      (-7.05, 107.60),
+    "Cicalengka":    (-6.99, 107.84),
+    "Padalarang":    (-6.84, 107.47),
+}
     for city, (lat, lon) in cities.items():
         if LAT_MIN <= lat <= LAT_MAX and LON_MIN <= lon <= LON_MAX:
             ax5.plot(lon, lat, "w^", markersize=6, zorder=5)

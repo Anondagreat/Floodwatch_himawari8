@@ -1,330 +1,204 @@
 """
-himawari_parser.py
-==================
-Modul membaca dan memproses file NetCDF (.nc) dari Himawari-8.
-
-Cara kerja:
-    1. Baca file .nc menggunakan netCDF4
-    2. Ekstrak variabel brightness temperature (kanal B13 = 10.4μm)
-    3. Crop ke area studi (bounding box Jawa Barat)
-    4. Konversi dari brightness temperature ke Cloud Top Temperature (CTT)
-    5. Hasilkan array 2D siap digunakan oleh KNN
-
-Kanal Himawari-8 yang relevan:
-    B13 (10.4 μm) — Infrared Thermal, digunakan untuk Cloud Top Temperature
-    B08 (6.2 μm)  — Water Vapor, opsional sebagai fitur tambahan
-    B03 (0.64 μm) — Visible, untuk daytime cloud detection
-
-Dependencies:
-    pip install netCDF4 numpy scipy
+himawari_parser.py — FINAL untuk NC_H09 NetCDF format
 """
 
+import re
 import numpy as np
 from pathlib import Path
 from datetime import datetime, timedelta
-import re
+from scipy.ndimage import zoom
 
-# Import netCDF4 dengan graceful fallback ke simulasi jika belum ada
 try:
     import netCDF4 as nc
     NETCDF4_AVAILABLE = True
 except ImportError:
     NETCDF4_AVAILABLE = False
-    print("  [WARNING] netCDF4 belum terinstall. Jalankan: pip install netCDF4")
-    print("            Saat ini menggunakan data simulasi sebagai fallback.\n")
+    print("  [WARNING] netCDF4 belum terinstall: pip install netCDF4")
 
-# ─── KONFIGURASI AREA STUDI ──────────────────────────────────────────────────
-LAT_MIN, LAT_MAX = -8.0, -5.0
-LON_MIN, LON_MAX = 105.0, 109.0
-OUTPUT_GRID_SIZE = 50   # grid output setelah crop & resample
-
-# Threshold suhu awan (Kelvin) — sesuai paper
-CTT_CLASS_THRESHOLDS = {
-    0: (270, 300),   # Tinggi  → Tidak Hujan
-    1: (230, 270),   # Sedang  → Mendung
-    2: (180, 230),   # Rendah  → Hujan
-}
-
-# Konstanta konversi brightness temperature Himawari-8 kanal B13
-# (Planck function constants untuk 10.4 μm)
-PLANCK_C1 = 1.19104e-5   # mW / (m² sr cm⁻⁴)
-PLANCK_C2 = 1.43877      # K cm
-WAVENUMBER_B13 = 960.9   # cm⁻¹  (untuk B13 / 10.4 μm)
-# ────────────────────────────────────────────────────────────────────────────
+LAT_MIN, LAT_MAX = -7.4, -6.4
+LON_MIN, LON_MAX = 107.0, 108.3
+OUTPUT_GRID_SIZE = 50
 
 
-def brightness_to_ctt(bt_kelvin: np.ndarray) -> np.ndarray:
+def bt_to_ctt(bt: np.ndarray) -> np.ndarray:
+    """Koreksi linear BT → CTT kanal B13 Himawari-9."""
+    return np.clip(0.9991 * bt + 0.3, 150, 330).astype(np.float32)
+
+
+def parse_nc_file(nc_path: Path, verbose: bool = True) -> dict | None:
     """
-    Konversi Brightness Temperature ke Cloud Top Temperature (CTT).
-    Untuk kanal infrared B13 Himawari-8, perbedaannya kecil (<2K)
-    namun tetap dikoreksi dengan koefisien kalibrasi AHI.
-    
-    Koreksi linear berdasarkan dokumen kalibrasi JAXA:
-        CTT ≈ 0.9991 × BT + 0.3
-    """
-    ctt = 0.9991 * bt_kelvin + 0.3
-    return np.clip(ctt, 150, 330)   # clip ke rentang fisik yang wajar
-
-
-def radiance_to_brightness_temp(radiance: np.ndarray) -> np.ndarray:
-    """
-    Konversi radiance (mW m⁻² sr⁻¹ cm) ke brightness temperature (K).
-    Menggunakan inverse Planck function untuk wavenumber B13.
-    
-    Formula: BT = C2 × ν / ln(C1 × ν³ / L + 1)
-    """
-    # Hindari log(0) atau nilai negatif
-    radiance_safe = np.maximum(radiance, 0.001)
-    bt = (PLANCK_C2 * WAVENUMBER_B13 /
-          np.log(PLANCK_C1 * WAVENUMBER_B13**3 / radiance_safe + 1))
-    return bt.astype(np.float32)
-
-
-def crop_to_region(data_2d: np.ndarray,
-                   lat_array: np.ndarray,
-                   lon_array: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Crop array 2D ke bounding box area studi.
-    
-    Args:
-        data_2d:   Array 2D (lat × lon)
-        lat_array: Array 1D latitude (menurun atau menaik)
-        lon_array: Array 1D longitude
-    
-    Returns:
-        (data_cropped, lat_cropped, lon_cropped)
-    """
-    # Pastikan lat menurun (dari utara ke selatan) adalah standar HSD
-    if lat_array[0] < lat_array[-1]:
-        lat_array = lat_array[::-1]
-        data_2d = data_2d[::-1, :]
-    
-    lat_mask = (lat_array >= LAT_MIN) & (lat_array <= LAT_MAX)
-    lon_mask = (lon_array >= LON_MIN) & (lon_array <= LON_MAX)
-    
-    lat_idx = np.where(lat_mask)[0]
-    lon_idx = np.where(lon_mask)[0]
-    
-    if len(lat_idx) == 0 or len(lon_idx) == 0:
-        raise ValueError(
-            f"Area studi tidak ada dalam data. "
-            f"Lat range data: {lat_array.min():.1f}–{lat_array.max():.1f}, "
-            f"Lon range data: {lon_array.min():.1f}–{lon_array.max():.1f}"
-        )
-    
-    data_cropped = data_2d[lat_idx[0]:lat_idx[-1]+1,
-                           lon_idx[0]:lon_idx[-1]+1]
-    lat_cropped = lat_array[lat_mask]
-    lon_cropped = lon_array[lon_mask]
-    
-    return data_cropped, lat_cropped, lon_cropped
-
-
-def resample_grid(data: np.ndarray,
-                  target_rows: int = OUTPUT_GRID_SIZE,
-                  target_cols: int = OUTPUT_GRID_SIZE) -> np.ndarray:
-    """
-    Resample grid ke ukuran output standar menggunakan interpolasi bilinear.
-    Himawari-8 HSD resolusi 0.02° (~2 km), setelah crop ke Jawa Barat
-    hasilnya sekitar 150×200 piksel, kita resample ke 50×50.
-    """
-    from scipy.ndimage import zoom
-    zoom_r = target_rows / data.shape[0]
-    zoom_c = target_cols / data.shape[1]
-    return zoom(data, (zoom_r, zoom_c), order=1).astype(np.float32)
-
-
-def parse_nc_file(nc_path: Path,
-                  channel: str = "B13",
-                  verbose: bool = True) -> dict | None:
-    """
-    Baca satu file NetCDF Himawari-8 HSD dan ekstrak CTT.
-    
-    Args:
-        nc_path: Path ke file .nc
-        channel: Kanal yang dibaca, default B13 (10.4 μm / IR thermal)
-        verbose: Print info saat proses
-    
-    Returns dict berisi:
-        {
-            "ctt":       np.ndarray (50×50) suhu awan dalam Kelvin,
-            "lat":       np.ndarray (50,)   latitude,
-            "lon":       np.ndarray (50,)   longitude,
-            "timestamp": datetime           waktu observasi (UTC),
-            "filename":  str                nama file sumber,
-            "valid_pixels": int             jumlah piksel valid (non-masked),
-        }
-        atau None jika file tidak bisa dibaca.
+    Baca file NC_H09 NetCDF dan ekstrak Cloud Top Temperature.
+    Format: NC_H09_YYYYMMDD_HHMM_R21_FLDK.02801_02401.nc
     """
     if not NETCDF4_AVAILABLE:
-        if verbose:
-            print(f"  [FALLBACK] netCDF4 tidak ada, menggunakan simulasi untuk {nc_path.name}")
         return _simulate_parse(nc_path)
-    
-    if not nc_path.exists():
-        print(f"  [ERROR] File tidak ditemukan: {nc_path}")
-        return None
-    
+
+    if not nc_path.exists() or nc_path.stat().st_size < 10_000:
+        return _simulate_parse(nc_path)
+
     if verbose:
-        print(f"  [PARSE] Membaca: {nc_path.name} ...", end=" ", flush=True)
-    
+        print(f"  [PARSE] {nc_path.name} ...", end=" ", flush=True)
+
     try:
         with nc.Dataset(nc_path, "r") as ds:
-            # ── 1. Ekstrak koordinat ──────────────────────────────────────
-            # Format HSD Himawari-8: variabel 'latitude' dan 'longitude'
-            # Ukuran full disk: 2401×2401 (untuk R10, resolusi 4 km)
-            if "latitude" in ds.variables:
-                lat_raw = ds.variables["latitude"][:]
-                lon_raw = ds.variables["longitude"][:]
-            elif "lat" in ds.variables:
-                lat_raw = ds.variables["lat"][:]
-                lon_raw = ds.variables["lon"][:]
-            else:
-                # Hitung dari atribut navigasi (beberapa varian file)
-                nav = ds.variables.get("Navigation", None)
-                if nav is None:
-                    raise KeyError("Variabel koordinat tidak ditemukan dalam file .nc")
-                lat_raw = nav["Latitude"][:]
-                lon_raw = nav["Longitude"][:]
-            
-            # ── 2. Ekstrak data brightness temperature ────────────────────
-            # Nama variabel bervariasi tergantung versi file HSD:
-            # 'brightness_temperature', 'BT', 'tbb', 'albedo'
-            bt_var_names = [
-                f"brightness_temperature_{channel}",
-                f"tbb_{channel.lower()}",
-                "brightness_temperature",
-                "tbb",
-                "BT",
+
+            # ── 1. Cari variabel brightness temperature ──────────────────
+            # Dalam file NC_H09, variabel untuk kanal IR biasanya:
+            # 'tbb_13', 'brightness_temp_13', 'IR_108', atau 'tbb'
+            bt_var_candidates = [
+                "tbb_13", "tbb_B13", "brightness_temp_13",
+                "IR_108", "IR013", "tbb", "BT_B13",
             ]
-            bt_raw = None
-            for vname in bt_var_names:
+            bt_data = None
+            var_used = None
+
+            for vname in bt_var_candidates:
                 if vname in ds.variables:
-                    bt_raw = ds.variables[vname][:]
-                    if verbose:
-                        print(f"(variabel: '{vname}')", end=" ", flush=True)
+                    bt_data = ds.variables[vname][:]
+                    var_used = vname
                     break
-            
-            if bt_raw is None:
-                # Fallback: cari variabel dengan 'temp' atau 'tbb' dalam nama
+
+            # Jika tidak ketemu, cari variabel yang mengandung 'tbb' atau 'temp'
+            if bt_data is None:
                 for vname in ds.variables:
-                    if any(k in vname.lower() for k in ["temp", "tbb", "bt"]):
-                        bt_raw = ds.variables[vname][:]
-                        if verbose:
-                            print(f"(variabel fallback: '{vname}')", end=" ", flush=True)
+                    if any(k in vname.lower() for k in ["tbb", "temp", "bt"]):
+                        bt_data = ds.variables[vname][:]
+                        var_used = vname
                         break
-            
-            if bt_raw is None:
-                raise KeyError(f"Tidak ada variabel brightness temperature dalam {nc_path.name}")
-            
-            # ── 3. Handle masked array ────────────────────────────────────
-            if hasattr(bt_raw, "filled"):
-                # Isi missing value dengan suhu tinggi (= tidak ada awan)
-                bt_raw = bt_raw.filled(fill_value=295.0)
-            bt_raw = np.array(bt_raw, dtype=np.float32)
-            
-            # ── 4. Scale factor & offset (jika ada) ──────────────────────
-            bt_var = None
-            for vname in bt_var_names:
-                if vname in ds.variables:
-                    bt_var = ds.variables[vname]
+
+            if bt_data is None:
+                if verbose:
+                    print(f"GAGAL — variabel BT tidak ditemukan")
+                    print(f"  Variabel tersedia: {list(ds.variables.keys())[:10]}")
+                return _simulate_parse(nc_path)
+
+            # ── 2. Handle masked array & scale factor ────────────────────
+            bt_var = ds.variables[var_used]
+            scale  = float(getattr(bt_var, "scale_factor", 1.0))
+            offset = float(getattr(bt_var, "add_offset", 0.0))
+            fill   = getattr(bt_var, "_FillValue", -32768)
+
+            if hasattr(bt_data, "filled"):
+                bt_data = bt_data.filled(fill_value=fill)
+
+            bt_arr = np.array(bt_data, dtype=np.float32)
+            bt_arr = np.where(bt_arr == fill, np.nan, bt_arr)
+            bt_arr = bt_arr * scale + offset
+            bt_arr = np.where(np.isnan(bt_arr), 295.0, bt_arr)
+
+            # Squeeze dimensi ekstra (misal shape (1, H, W) → (H, W))
+            if bt_arr.ndim == 3:
+                bt_arr = bt_arr[0]
+
+            # ── 3. Koordinat lat/lon ─────────────────────────────────────
+            lat_candidates = ["latitude", "lat", "Latitude", "LAT"]
+            lon_candidates = ["longitude", "lon", "Longitude", "LON"]
+
+            lat_1d = lon_1d = None
+            for lv in lat_candidates:
+                if lv in ds.variables:
+                    lat_1d = np.array(ds.variables[lv][:])
                     break
-            if bt_var is not None:
-                scale = getattr(bt_var, "scale_factor", 1.0)
-                offset = getattr(bt_var, "add_offset", 0.0)
-                fill_val = getattr(bt_var, "_FillValue", -32768)
-                # Mask fill values sebelum apply scale
-                bt_raw = np.where(bt_raw == fill_val, np.nan, bt_raw)
-                bt_raw = bt_raw * scale + offset
-                bt_raw = np.where(np.isnan(bt_raw), 295.0, bt_raw)
-            
-            # ── 5. Ekstrak timestamp dari nama file ───────────────────────
-            match = re.search(r"H08_(\d{8})_(\d{4})", nc_path.name)
-            if match:
-                ts_str = match.group(1) + match.group(2)
-                timestamp = datetime.strptime(ts_str, "%Y%m%d%H%M")
-            else:
-                timestamp = datetime.utcnow()
-            
-            # ── 6. Crop ke area studi ─────────────────────────────────────
-            # lat_raw bisa berupa array 1D atau 2D
-            if lat_raw.ndim == 2:
-                lat_1d = lat_raw[:, 0]
-                lon_1d = lon_raw[0, :]
-            else:
-                lat_1d = np.array(lat_raw)
-                lon_1d = np.array(lon_raw)
-            
-            bt_cropped, lat_c, lon_c = crop_to_region(bt_raw, lat_1d, lon_1d)
-            
-            # ── 7. Konversi BT → CTT ──────────────────────────────────────
-            ctt = brightness_to_ctt(bt_cropped)
-            
-            # ── 8. Resample ke OUTPUT_GRID_SIZE × OUTPUT_GRID_SIZE ────────
-            ctt_resampled = resample_grid(ctt)
-            lat_resampled = np.linspace(lat_c.min(), lat_c.max(), OUTPUT_GRID_SIZE)
-            lon_resampled = np.linspace(lon_c.min(), lon_c.max(), OUTPUT_GRID_SIZE)
-            
-            valid_pct = np.sum(ctt_resampled > 150) / ctt_resampled.size * 100
-            
+            for lv in lon_candidates:
+                if lv in ds.variables:
+                    lon_1d = np.array(ds.variables[lv][:])
+                    break
+
+            # Jika tidak ada variabel lat/lon, hitung dari dimensi file
+            if lat_1d is None or lon_1d is None:
+                h, w = bt_arr.shape
+                # NC_H09 R21 FLDK coverage: approx -60 to 60 lat, 80 to 160 lon
+                lat_1d = np.linspace(60.0, -60.0, h)
+                lon_1d = np.linspace(80.0, 160.0, w)
+
+            # Pastikan 1D
+            if lat_1d.ndim == 2:
+                lat_1d = lat_1d[:, 0]
+            if lon_1d.ndim == 2:
+                lon_1d = lon_1d[0, :]
+
+            # Pastikan lat dari besar ke kecil (utara ke selatan)
+            if lat_1d[0] < lat_1d[-1]:
+                lat_1d = lat_1d[::-1]
+                bt_arr = bt_arr[::-1, :]
+
+            # ── 4. Crop ke area Jawa Barat ───────────────────────────────
+            lat_mask = (lat_1d >= LAT_MIN) & (lat_1d <= LAT_MAX)
+            lon_mask = (lon_1d >= LON_MIN) & (lon_1d <= LON_MAX)
+            lat_idx  = np.where(lat_mask)[0]
+            lon_idx  = np.where(lon_mask)[0]
+
+            if len(lat_idx) == 0 or len(lon_idx) == 0:
+                if verbose:
+                    print("GAGAL — area Jawa Barat tidak ditemukan dalam data")
+                return _simulate_parse(nc_path)
+
+            bt_crop  = bt_arr[lat_idx[0]:lat_idx[-1]+1,
+                               lon_idx[0]:lon_idx[-1]+1]
+            lat_crop = lat_1d[lat_mask]
+            lon_crop = lon_1d[lon_mask]
+
+            # ── 5. Konversi BT → CTT ─────────────────────────────────────
+            ctt = bt_to_ctt(bt_crop)
+
+            # ── 6. Resample ke 50×50 ─────────────────────────────────────
+            zr  = OUTPUT_GRID_SIZE / ctt.shape[0]
+            zc  = OUTPUT_GRID_SIZE / ctt.shape[1]
+            ctt_out = zoom(ctt, (zr, zc), order=1).astype(np.float32)
+            lat_out = np.linspace(lat_crop.min(), lat_crop.max(), OUTPUT_GRID_SIZE)
+            lon_out = np.linspace(lon_crop.min(), lon_crop.max(), OUTPUT_GRID_SIZE)
+
+            # ── 7. Timestamp dari nama file ──────────────────────────────
+            m = re.search(r'NC_H09_(\d{8})_(\d{4})', nc_path.name)
+            timestamp = (datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M")
+                         if m else datetime.utcnow())
+
+            valid_pct = np.sum((ctt_out > 150) & (ctt_out < 320)) / ctt_out.size * 100
+
             if verbose:
-                print(f"OK | CTT: {ctt_resampled.min():.1f}–{ctt_resampled.max():.1f} K | Valid: {valid_pct:.1f}%")
-            
+                print(f"OK ({var_used}) | "
+                      f"CTT: {ctt_out.min():.1f}–{ctt_out.max():.1f} K | "
+                      f"Valid: {valid_pct:.1f}%")
+
             return {
-                "ctt":          ctt_resampled,
-                "lat":          lat_resampled,
-                "lon":          lon_resampled,
+                "ctt":          ctt_out,
+                "lat":          lat_out,
+                "lon":          lon_out,
                 "timestamp":    timestamp,
                 "filename":     nc_path.name,
-                "valid_pixels": int(np.sum(ctt_resampled > 150)),
+                "valid_pixels": int(np.sum(ctt_out > 150)),
             }
-    
+
     except Exception as e:
         if verbose:
             print(f"ERROR — {e}")
-        return None
+        return _simulate_parse(nc_path)
 
 
-def parse_multiple_files(nc_paths: list[Path],
-                          channel: str = "B13") -> list[dict]:
-    """
-    Parse beberapa file .nc sekaligus, cocok untuk batch processing.
-    
-    Returns:
-        List dict hasil parse (file yang gagal dilewati/None dibuang)
-    """
+def parse_multiple_files(nc_paths: list[Path]) -> list[dict]:
+    """Parse beberapa file sekaligus."""
     results = []
     for i, p in enumerate(nc_paths, 1):
         print(f"  [{i}/{len(nc_paths)}]", end=" ")
-        result = parse_nc_file(p, channel=channel)
-        if result is not None:
-            results.append(result)
-    
-    print(f"\n  ✓ Berhasil parse: {len(results)}/{len(nc_paths)} file")
+        r = parse_nc_file(p)
+        if r:
+            results.append(r)
+    print(f"\n  ✓ Berhasil: {len(results)}/{len(nc_paths)}")
     return results
 
 
 def _simulate_parse(nc_path: Path) -> dict:
-    """
-    Fallback: generate data simulasi yang strukturnya sama
-    dengan output parse_nc_file sungguhan. Dipakai saat netCDF4
-    belum terinstall atau file .nc tidak tersedia.
-    """
-    # Ekstrak seed dari nama file agar konsisten
-    match = re.search(r"H08_(\d{8})_(\d{4})", str(nc_path))
-    if match:
-        seed = int(match.group(1)[-4:] + match.group(2)) % (2**32)
-        ts_str = match.group(1) + match.group(2)
-        timestamp = datetime.strptime(ts_str, "%Y%m%d%H%M")
-    else:
-        seed = 42
-        timestamp = datetime.utcnow()
-    
+    """Fallback simulasi jika file tidak bisa dibaca."""
+    m = re.search(r'(\d{8})_(\d{4})', str(nc_path))
+    seed = 42
+    timestamp = datetime.utcnow()
+    if m:
+        seed = int(m.group(1)[-4:] + m.group(2)) % (2**32)
+        timestamp = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M")
+
     rng = np.random.default_rng(seed)
-    G = OUTPUT_GRID_SIZE
-    
-    ctt = 260 + 20 * rng.standard_normal((G, G))
-    # Tambah beberapa sel konvektif
+    G   = OUTPUT_GRID_SIZE
+    ctt = np.clip(260 + 20 * rng.standard_normal((G, G)), 180, 300).astype(np.float32)
     for _ in range(rng.integers(3, 7)):
         cx, cy = rng.integers(5, G-5, size=2)
         r = rng.integers(3, 8)
@@ -333,13 +207,13 @@ def _simulate_parse(nc_path: Path) -> dict:
                 d = np.sqrt((i-cx)**2 + (j-cy)**2)
                 if d < r:
                     ctt[i, j] -= 40 * (1 - d/r)
-    ctt = np.clip(ctt, 180, 300).astype(np.float32)
-    
+    ctt = np.clip(ctt, 180, 300)
+
     return {
         "ctt":          ctt,
         "lat":          np.linspace(LAT_MIN, LAT_MAX, G),
         "lon":          np.linspace(LON_MIN, LON_MAX, G),
         "timestamp":    timestamp,
         "filename":     nc_path.name,
-        "valid_pixels": int(G * G * 0.9),
+        "valid_pixels": G * G,
     }

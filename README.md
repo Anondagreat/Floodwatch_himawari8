@@ -2,6 +2,11 @@
 
 **Universitas Telkom × BRIN | Bandung, 2024**
 
+> **Area Studi:** Bandung dan sekitarnya (eksklusif)
+> Mencakup: Kota Bandung, Kab. Bandung, Bandung Barat, Cimahi, Lembang, Soreang, Majalaya, Padalarang
+> Koordinat: **LAT -7.4° s/d -6.4° | LON 107.0° s/d 108.3°**
+> Tidak mencakup: Bogor, Cirebon, Sukabumi, Tasikmalaya
+
 ---
 
 ## 📦 Isi Folder Ini
@@ -267,6 +272,7 @@ KNN Training (K = 5, 7, 9, 11) + Evaluasi Akurasi
 Prediksi seluruh grid 50×50
     ↓
 Peta Risiko Banjir + Visualisasi 6 panel
+Area: Bandung & sekitarnya (LAT -7.4°–-6.4°, LON 107.0°–108.3°)
 ```
 
 ### Alur Kerja — Fase 2 (Pipeline Otomatis)
@@ -280,7 +286,7 @@ Parse NetCDF → Ekstrak Brightness Temperature (B13)
     ↓
 Konversi BT → Cloud Top Temperature (CTT)
     ↓
-Crop ke Jawa Barat (LAT -8°–-5°, LON 105°–109°)
+Crop ke Bandung & sekitarnya (LAT -7.4°–-6.4°, LON 107.0°–108.3°)
     ↓
 Resample ke grid 50×50
     ↓  [pipeline_fase2.py]
@@ -369,28 +375,44 @@ Simpan plot PNG + log JSON + alert otomatis
 
 ---
 
-## 📁 Referensi Struktur Data Himawari-8
+## 📍 Area Studi — Bandung & Sekitarnya
 
-Jika ingin inspeksi file .nc secara manual (opsional, tidak wajib):
+Area studi dipersempit secara eksklusif ke wilayah Bandung Raya.
 
 ```
-Struktur FTP JAXA:
-    Host   : ftp.ptree.jaxa.jp
-    Folder : /jma/hsd/YYYYMM/DD/HHmm/
-    File   : H08_YYYYMMDD_HHmm_R10_FLDK.02401_02401.nc
-    Cadence: setiap 10 menit UTC
+Bounding Box:
+    LAT : -7.4° s/d -6.4° S  (rentang ~110 km utara-selatan)
+    LON : 107.0° s/d 108.3° E (rentang ~140 km barat-timur)
+    Grid: 50×50 titik (~2.2 km/titik resolusi)
 
-Tools inspeksi manual (opsional):
-    Panoply  → https://www.giss.nasa.gov/tools/panoply/  (buka & lihat isi .nc)
-    HDFView  → https://www.hdfgroup.org/downloads/hdfview/ (alternatif Panoply)
-    FileZilla→ https://filezilla-project.org/ (browser FTP manual)
+Kota-kota dalam area:
+    Kota Bandung    (-6.91°S, 107.61°E) ← pusat
+    Cimahi          (-6.88°S, 107.54°E)
+    Lembang         (-6.81°S, 107.62°E)
+    Padalarang      (-6.84°S, 107.47°E)
+    Soreang         (-7.03°S, 107.52°E)
+    Banjaran        (-7.05°S, 107.60°E)
+    Majalaya        (-7.04°S, 107.78°E)
+    Cicalengka      (-6.99°S, 107.84°E)
 
-Kanal yang digunakan sistem ini:
-    B13 (10.4 μm, Infrared Thermal) → Cloud Top Temperature (CTT)
+Tidak termasuk (di luar bounding box):
+    Bogor           (106.80°E ← terlalu barat)
+    Cirebon         (108.55°E ← terlalu timur)
+    Sukabumi        (106.93°E ← terlalu barat)
+    Tasikmalaya     (108.22°E ← terlalu timur/selatan)
 ```
 
-> Fase 2 sudah mengotomasi seluruh proses download dan parsing.
-> Tools di atas hanya diperlukan jika ingin inspeksi file secara manual.
+**Referensi FTP JAXA (untuk download manual):**
+```
+Host   : ftp.ptree.jaxa.jp
+Folder : /jma/netcdf/YYYYMM/DD/
+File   : NC_H09_YYYYMMDD_HHMM_R21_FLDK.02801_02401.nc
+Kanal  : B13 (10.4 μm, Infrared) → Cloud Top Temperature (CTT)
+Cadence: setiap 10 menit UTC
+```
+
+> Tools opsional untuk inspeksi manual file .nc:
+> Panoply → https://www.giss.nasa.gov/tools/panoply/
 
 ---
 

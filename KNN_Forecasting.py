@@ -12,14 +12,8 @@ Alur:
     6. Output: PNG sequence + GIF animasi + grafik perbandingan
 
 Cara pakai:
-    # Download 1 hari kemarin lalu forecast
-    python forecasting_fase3.py --mode auto
-
     # Pakai file .nc yang sudah ada di data_himawari/
     python forecasting_fase3.py --mode local
-
-    # Download tanggal spesifik
-    python forecasting_fase3.py --mode date --date "2026-05-20"
 
     # Simulasi (tanpa file .nc)
     python forecasting_fase3.py --mode simulate
@@ -30,7 +24,7 @@ import argparse
 import json
 import pickle
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import matplotlib
@@ -89,135 +83,28 @@ DATA_DIR     = Path("./data_himawari")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BAGIAN 1: DOWNLOAD DATA
+# BAGIAN 1: DATA LOCAL / SIMULATE
 # ══════════════════════════════════════════════════════════════════════════════
+# Data diambil dari folder lokal `data_himawari/` atau dihasilkan secara simulasi.
+# Jika `--mode local` dipilih, file .nc dicari dalam folder ini.
 
-def download_one_day(target_date: datetime,
-                     interval_minutes: int = 10) -> list[Path]:
-    """
-    Download semua file .nc untuk satu hari penuh dari JAXA.
-    
-    Himawari-9 beroperasi 00:00–23:50 UTC, interval 10 menit.
-    Satu hari = 144 file × ~120 MB = bisa sangat berat.
-    
-    Untuk efisiensi, default download dengan interval 10 menit
-    tapi hanya jam operasional yang relevan (00:00–23:50 UTC).
-    
-    Args:
-        target_date: Tanggal yang mau didownload
-        interval_minutes: Interval download (10, 30, atau 60)
-    
-    Returns:
-        List path file yang berhasil didownload
-    """
-    import ftplib
-    import os
-
-    FTP_HOST = "ftp.ptree.jaxa.jp"
-    FTP_USER = os.environ.get("JAXA_USER", "asmodes123_gmail.com")
-    FTP_PASS = os.environ.get("JAXA_PASS", "SP+wari8")
-
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Generate semua timestamp untuk hari itu
-    timestamps = []
-    current = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    end     = target_date.replace(hour=23, minute=50, second=0, microsecond=0)
-    while current <= end:
-        timestamps.append(current)
-        current += timedelta(minutes=interval_minutes)
-
-    print(f"\n{'='*60}")
-    print(f"  DOWNLOAD DATA HIMAWARI-9")
-    print(f"  Tanggal : {target_date.strftime('%d %B %Y')}")
-    print(f"  Interval: {interval_minutes} menit")
-    print(f"  Target  : {len(timestamps)} file")
-    print(f"{'='*60}")
-
-    downloaded = []
-    folder_cache = {}   # cache folder yang sudah dicek
-
-    try:
-        with ftplib.FTP(FTP_HOST, timeout=120) as ftp:
-            ftp.login(FTP_USER, FTP_PASS)
-            print("  Login FTP OK")
-
-            for i, ts in enumerate(timestamps, 1):
-                folder = (f"/jma/netcdf/{ts.strftime('%Y%m')}/"
-                          f"{ts.strftime('%d')}/")
-                fname  = (f"NC_H09_{ts.strftime('%Y%m%d_%H%M')}"
-                          f"_R21_FLDK.02801_02401.nc")
-                local  = DATA_DIR / fname
-
-                # Skip jika sudah ada dan valid
-                if local.exists() and local.stat().st_size > 10_000:
-                    downloaded.append(local)
-                    if i % 10 == 0:
-                        print(f"  [{i}/{len(timestamps)}] "
-                              f"{ts.strftime('%H:%M')} UTC — SKIP (sudah ada)")
-                    continue
-
-                # Pindah folder jika perlu
-                if folder not in folder_cache:
-                    try:
-                        ftp.cwd(folder)
-                        available = ftp.nlst()
-                        folder_cache[folder] = available
-                    except ftplib.error_perm:
-                        folder_cache[folder] = []
-                        print(f"  [{i}/{len(timestamps)}] "
-                              f"{ts.strftime('%H:%M')} UTC — folder tidak ada")
-                        continue
-
-                available = folder_cache[folder]
-
-                # Cari file yang cocok (toleransi nama berbeda)
-                target_ts = ts.strftime('%Y%m%d_%H%M')
-                candidates = [f for f in available
-                              if target_ts in f
-                              and "FLDK" in f
-                              and f.endswith(".nc")]
-
-                if not candidates:
-                    print(f"  [{i}/{len(timestamps)}] "
-                          f"{ts.strftime('%H:%M')} UTC — file tidak ada")
-                    continue
-
-                actual_fname = candidates[0]
-                actual_local = DATA_DIR / actual_fname
-
-                try:
-                    ftp.cwd(folder)
-                    print(f"  [{i}/{len(timestamps)}] "
-                          f"{ts.strftime('%H:%M')} UTC — downloading...",
-                          end=" ", flush=True)
-                    with open(actual_local, "wb") as f:
-                        ftp.retrbinary(f"RETR {actual_fname}", f.write)
-                    size_mb = actual_local.stat().st_size / 1024 / 1024
-                    print(f"OK ({size_mb:.0f} MB)")
-                    downloaded.append(actual_local)
-                except Exception as e:
-                    print(f"GAGAL — {e}")
-                    if actual_local.exists():
-                        actual_local.unlink()
-
-    except Exception as e:
-        print(f"  FTP Error: {e}")
-
-    print(f"\n  ✓ Berhasil: {len(downloaded)}/{len(timestamps)} file")
-    return downloaded
-
-
-def load_local_files(target_date: datetime | None = None) -> list[Path]:
+def load_local_files(target_date: datetime | None = None,
+                     subfolder: str | None = None) -> list[Path]:
     """
     Muat file .nc dari folder lokal.
+    Jika subfolder diberikan, cari di dalam data_himawari/<subfolder>.
     Jika target_date diberikan, filter hanya file dari tanggal itu.
     """
-    if not DATA_DIR.exists():
+    if subfolder:
+        search_dir = DATA_DIR / subfolder
+    else:
+        search_dir = DATA_DIR
+
+    if not search_dir.exists():
         return []
 
-    all_files = sorted(DATA_DIR.glob("NC_H09_*.nc"))
-    all_files = [f for f in all_files if f.stat().st_size > 10_000]
+    all_files = sorted(search_dir.glob("**/*NC_H09*.nc"))
+    all_files = [f for f in all_files if f.is_file() and f.stat().st_size > 10_000]
 
     if target_date is not None:
         date_str = target_date.strftime("%Y%m%d")
@@ -239,11 +126,10 @@ def parse_nc_to_ctt(nc_path: Path,
     """
     from scipy.ndimage import zoom as sp_zoom
 
-    # Hanya proses file R21 (Full Disk)
-    if "_R21_" not in nc_path.name and "_r21_" not in nc_path.name:
-        return None
-
+    # Prefer R21 (Full Disk) files, but subset files may also be usable
     m = re.search(r'NC_H09_(\d{8})_(\d{4})', nc_path.name)
+    if not m:
+        m = re.search(r'.*NC_H09_(\d{8})_(\d{4})', nc_path.name)
     if not m:
         return None
     timestamp = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M")
@@ -705,16 +591,29 @@ def classify_flood(precip: np.ndarray) -> np.ndarray:
 def build_knn_model() -> tuple[KNeighborsClassifier, StandardScaler]:
     """Load atau build model KNN."""
     model_path  = MODEL_DIR / "knn_model.pkl"
-    scaler_path = MODEL_DIR / "scaler.pkl"
+    scaler_path = MODEL_DIR / "scaler_knn.pkl"
 
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     if model_path.exists() and scaler_path.exists():
-        with open(model_path, "rb") as f:
-            knn = pickle.load(f)
-        with open(scaler_path, "rb") as f:
-            scaler = pickle.load(f)
-        return knn, scaler
+        try:
+            with open(model_path, "rb") as f:
+                knn = pickle.load(f)
+            with open(scaler_path, "rb") as f:
+                scaler = pickle.load(f)
+
+            if not isinstance(knn, KNeighborsClassifier):
+                raise ValueError("Saved model is not a KNeighborsClassifier")
+            if getattr(knn, "n_features_in_", None) not in (None, 1):
+                raise ValueError(
+                    f"Saved KNN model expects {knn.n_features_in_} features"
+                )
+            if not hasattr(scaler, "transform"):
+                raise ValueError("Saved scaler is invalid")
+
+            return knn, scaler
+        except Exception as e:
+            print(f"  Warning: saved KNN model invalid ({e}). Rebuilding model.")
 
     # Build dari scratch
     rng = np.random.default_rng(42)
@@ -1226,20 +1125,16 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["auto", "local", "date", "simulate"],
-        default="simulate",
+        choices=["local", "simulate"],
+        default="local",
         help=(
-            "auto     : download 1 hari kemarin otomatis\n"
             "local    : pakai file .nc yang sudah ada\n"
-            "date     : download tanggal spesifik\n"
             "simulate : simulasi tanpa file .nc"
         )
     )
-    parser.add_argument("--date", type=str,
-                        help="Tanggal format YYYY-MM-DD (untuk mode date)")
-    parser.add_argument("--interval", type=int, default=10,
-                        choices=[10, 30, 60],
-                        help="Interval download (menit), default 10")
+    parser.add_argument("--data-folder", type=str,
+                        help=("Subfolder relatif di data_himawari untuk mode local, "
+                              "misalnya 202512/01 atau 202603/14"))
     args = parser.parse_args()
 
     print("\n" + "="*65)
@@ -1269,16 +1164,26 @@ def main():
 
     elif args.mode == "local":
         print("\n[2] Mode LOCAL — memuat file .nc dari data_himawari/ ...")
-        all_files = sorted(DATA_DIR.glob("NC_H09_*.nc"))
+
+        if args.data_folder:
+            print(f"  Menggunakan subfolder: {args.data_folder}")
+
+        all_files = load_local_files(subfolder=args.data_folder)
         all_files = [f for f in all_files if f.stat().st_size > 10_000]
 
-        # Filter hanya R21 (Full Disk — mencakup Indonesia)
-        nc_files = [f for f in all_files if "_R21_" in f.name or "_r21_" in f.name]
-        skipped  = len(all_files) - len(nc_files)
+        if args.data_folder and not all_files:
+            print(f"  ❌ Tidak ada data .nc di folder '{args.data_folder}'.")
+            print("  Pastikan folder relatif ada di data_himawari dan berisi file .nc")
+            return
+
+        nc_files = all_files
         print(f"  Total file   : {len(all_files)}")
-        print(f"  File R21     : {len(nc_files)}")
-        if skipped > 0:
-            print(f"  Dilewati     : {skipped} file (bukan R21/Full Disk)")
+
+        subset_files = [f for f in all_files if "_R21_" not in f.name and "_r21_" not in f.name]
+        if subset_files:
+            print(f"  Detected subset/non-R21 files: {len(subset_files)}")
+            for p in subset_files[:5]:
+                print(f"    - {p.name}")
 
         if not nc_files:
             print("  ❌ Tidak ada file R21. Pastikan download Full Disk dari JAXA.")
@@ -1325,20 +1230,6 @@ def main():
 
         nc_files = None  # raw_series_paired sudah siap
 
-    elif args.mode == "auto":
-        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-        nc_files  = download_one_day(yesterday, interval_minutes=args.interval)
-        if not nc_files:
-            print("  Download gagal, beralih ke simulasi")
-            nc_files = None
-
-    elif args.mode == "date":
-        if not args.date:
-            print("  Error: --date diperlukan untuk mode date")
-            return
-        target = datetime.strptime(args.date, "%Y-%m-%d")
-        nc_files = download_one_day(target, interval_minutes=args.interval)
-
     # ── Step 2: Parse file → time series (skip jika simulasi) ─────────
     print("\n[2] Membangun time series ...")
     if nc_files is not None:
@@ -1365,10 +1256,12 @@ def main():
                 f"{used_dates[0].strftime('%Y%m%d')}_"
                 f"{used_dates[-1].strftime('%Y%m%d')}"
             )
-    elif args.mode == "date" and args.date:
-        date_folder = datetime.strptime(args.date, "%Y-%m-%d").strftime("%Y%m%d")
     else:
         date_folder = datetime.now().strftime("%Y%m%d")
+
+    if args.mode == "local" and args.data_folder:
+        sanitized = args.data_folder.strip().replace('\\', '_').replace('/', '_')
+        date_folder = f"{sanitized}_{date_folder}"
 
     output_dir = OUTPUT_DIR / date_folder
     output_dir.mkdir(parents=True, exist_ok=True)
